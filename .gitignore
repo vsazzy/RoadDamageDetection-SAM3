@@ -42,6 +42,8 @@ htmlcov/
 # Environment
 .env
 .venv
+.runtime-cache/
+.uv-cache/
 env/
 venv/
 ENV/

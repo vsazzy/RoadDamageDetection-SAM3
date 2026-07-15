@@ -8,6 +8,12 @@ This project is road damage detection applications that designed to enhance road
 ## Performing Detection Using Video
 ![Detection using video](resource/RDD_Video_Example.gif)
 
+## Optional SAM 3 Crack Masks
+
+The image-detection page can refine every YOLO bounding box into a pixel mask using Meta SAM 3. The app sends the original image and raw YOLO boxes to an isolated CUDA service, then provides a colored overlay and a binary-mask PNG for download.
+
+SAM 3 uses a separate environment because its official release requires Python 3.12+, PyTorch 2.7+, CUDA 12.6+, a CUDA GPU, and approved checkpoint access. See [sam3_service/README.md](sam3_service/README.md) for setup instructions. After starting the service, set `SAM3_SERVICE_URL` and enable **Generate precise SAM 3 masks from YOLO bounding boxes** on the Image Detection page.
+
 The project is powered by YOLOv8 deep learning model that trained on Crowdsensing-based Road Damage Detection Challenge 2022 dataset.
 
 There is four types of damage that this model can detects such as:
