@@ -100,9 +100,9 @@ if image_file is not None:
         boxes = result.boxes.cpu().numpy()
         detections = [
            Detection(
-               class_id=int(_box.cls),
-               label=CLASSES[int(_box.cls)],
-               score=float(_box.conf),
+               class_id=int(_box.cls.item()),
+               label=CLASSES[int(_box.cls.item())],
+               score=float(_box.conf.item()),
                # Keep the model's original stretched-square preprocessing, then
                # map the detector box back onto the untouched source for SAM 3.
                box=scale_box_xyxy(

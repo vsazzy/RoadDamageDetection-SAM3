@@ -119,8 +119,10 @@ class Sam3BoxSegmenter:
                 box=xyxy_to_normalized_cxcywh(box, width, height),
                 label=True,
             )
-            candidates = state["masks"].detach().cpu().numpy()
-            candidate_scores = state["scores"].detach().cpu().numpy()
+            # SAM 3 runs under BF16 autocast. NumPy cannot represent BF16, so
+            # normalize tensors to supported CPU dtypes before conversion.
+            candidates = state["masks"].detach().bool().cpu().numpy()
+            candidate_scores = state["scores"].detach().float().cpu().numpy()
             mask, score = select_box_mask(candidates, candidate_scores, box)
             masks.append(clip_mask_to_padded_box(mask, box, box_padding))
             scores.append(score)
