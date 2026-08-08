@@ -2,8 +2,6 @@
 
 A two-tier deep learning framework combining fine-tuned YOLOv8-small candidate detection with Meta Segment Anything Model 3 (SAM 3) zero-shot pixel mask refinement for automated pavement defect auditing.
 
-![Banner](resource/banner.png)
-
 ## Project Overview
 
 Standard bounding box object detectors like YOLO output rectangular boxes that overestimate road crack surface area by including non-damaged asphalt background inside the detection box. This project implements a hybrid pipeline that snaps directly onto exact crack contours without requiring expensive pixel-level manual mask annotations during training.
