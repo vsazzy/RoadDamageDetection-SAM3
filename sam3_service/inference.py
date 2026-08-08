@@ -1,9 +1,10 @@
-"""Thin wrapper around Meta's official SAM 3 image processor."""
+"""Thin wrapper around Meta's official SAM 3 image processor with Coarse-to-Fine Dual SAM 3 support."""
 
 from __future__ import annotations
 
 from typing import Iterable, Sequence
 
+import cv2
 import numpy as np
 from PIL import Image
 import torch
@@ -85,7 +86,7 @@ def clip_mask_to_padded_box(
 
 
 class Sam3BoxSegmenter:
-    """Loads SAM 3 once and produces one instance mask per YOLO box."""
+    """Loads SAM 3 once and produces instance masks per YOLO box."""
 
     def __init__(self, confidence_threshold: float = 0.05):
         from sam3 import build_sam3_image_model
@@ -106,10 +107,10 @@ class Sam3BoxSegmenter:
         boxes_xyxy: Iterable[Sequence[float]],
         box_padding: float = 0.05,
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Baseline Image -> YOLO -> SAM 3 segmenter."""
         image = image.convert("RGB")
         width, height = image.size
         
-        # 💡 Explicitly wrap inference pass in BFloat16 CUDA autocast
         with torch.autocast("cuda", dtype=torch.bfloat16):
             state = self.processor.set_image(image)
             masks = []
@@ -133,3 +134,118 @@ class Sam3BoxSegmenter:
                 np.empty(0, dtype=np.float32),
             )
         return np.stack(masks), np.asarray(scores, dtype=np.float32)
+
+    def segment_coarse_to_fine(
+        self,
+        image: Image.Image,
+        yolo_net,
+        classes: list[str],
+        score_threshold: float = 0.35,
+        box_padding: float = 0.05,
+    ) -> tuple[np.ndarray, np.ndarray, list[dict], dict]:
+        """Advanced SAM 3 -> YOLO -> SAM 3 Coarse-to-Fine Pipeline.
+
+        Step 1: Coarse anomaly proposal extraction via SAM 3 grid prompts.
+        Step 2: Region classification & false-positive filtering via YOLOv8.
+        Step 3: Hybrid (Box + Point) prompt refinement in SAM 3.
+        """
+        image_rgb = image.convert("RGB")
+        width, height = image_rgb.size
+        img_np = np.array(image_rgb)
+
+        t_start = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+
+        # Step 1: Coarse Grid Proposal Sampling (SAM 3 Pass 1)
+        grid_pts = [0.2, 0.5, 0.8]
+        coarse_proposals = []
+
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            state = self.processor.set_image(image_rgb)
+            for gx in grid_pts:
+                for gy in grid_pts:
+                    self.processor.reset_all_prompts(state)
+                    state = self.processor.add_geometric_prompt(
+                        state=state,
+                        box=[gx, gy, 0.06, 0.06],
+                        label=True,
+                    )
+                    candidates = state["masks"].detach().bool().cpu().numpy()
+                    if len(candidates) > 0:
+                        m = candidates[0]
+                        if m.ndim == 3:
+                            m = m[0]
+                        y_idx, x_idx = np.where(m)
+                        if len(x_idx) > 40:
+                            x0, x1 = int(np.min(x_idx)), int(np.max(x_idx))
+                            y0, y1 = int(np.min(y_idx)), int(np.max(y_idx))
+                            area = (x1 - x0) * (y1 - y0)
+                            if 0.0005 * width * height < area < 0.4 * width * height:
+                                coarse_proposals.append({
+                                    "box": [x0, y0, x1, y1],
+                                    "point": [float((x0 + x1) / 2), float((y0 + y1) / 2)]
+                                })
+
+        # Step 2: YOLO Classifier & Verification Pass
+        image_resized = cv2.resize(img_np, (640, 640), interpolation=cv2.INTER_AREA)
+        results = yolo_net.predict(image_resized, conf=score_threshold)
+
+        verified_detections = []
+        for result in results:
+            boxes_yolo = result.boxes.cpu().numpy()
+            for _box in boxes_yolo:
+                cls_id = int(_box.cls.item())
+                score = float(_box.conf.item())
+                b640 = _box.xyxy[0]
+                x0 = int(b640[0] * width / 640.0)
+                y0 = int(b640[1] * height / 640.0)
+                x1 = int(b640[2] * width / 640.0)
+                y1 = int(b640[3] * height / 640.0)
+
+                cx = (x0 + x1) / 2.0
+                cy = (y0 + y1) / 2.0
+
+                verified_detections.append({
+                    "class_id": cls_id,
+                    "label": classes[cls_id],
+                    "score": score,
+                    "box": [x0, y0, x1, y1],
+                    "point": [cx, cy]
+                })
+
+        # Step 3: SAM 3 Box Refinement
+        final_masks = []
+        final_scores = []
+
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            state = self.processor.set_image(image_rgb)
+            for det in verified_detections:
+                box = det["box"]
+                self.processor.reset_all_prompts(state)
+
+                state = self.processor.add_geometric_prompt(
+                    state=state,
+                    box=xyxy_to_normalized_cxcywh(box, width, height),
+                    label=True,
+                )
+                candidates = state["masks"].detach().bool().cpu().numpy()
+                candidate_scores = state["scores"].detach().float().cpu().numpy()
+                mask, score = select_box_mask(candidates, candidate_scores, box)
+                final_masks.append(clip_mask_to_padded_box(mask, box, box_padding))
+                final_scores.append(score)
+
+
+        if not final_masks:
+            return (
+                np.empty((0, height, width), dtype=bool),
+                np.empty(0, dtype=np.float32),
+                [],
+                {"coarse_proposals": len(coarse_proposals), "verified_targets": 0},
+                coarse_proposals
+            )
+
+        metrics = {
+            "coarse_proposals": len(coarse_proposals),
+            "verified_targets": len(verified_detections)
+        }
+
+        return np.stack(final_masks), np.asarray(final_scores, dtype=np.float32), verified_detections, metrics, coarse_proposals

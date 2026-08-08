@@ -111,3 +111,37 @@ def make_mask_overlay(
         draw.text((x0 + 4, text_y + 3), label, fill=(255, 255, 255), font=font)
 
     return np.asarray(rendered)
+
+
+def make_proposal_overlay(
+    image_rgb: np.ndarray,
+    coarse_proposals: Iterable[dict],
+    verified_detections: Iterable[dict],
+) -> np.ndarray:
+    """Draw SAM 3 coarse anomaly proposals (Gold) and YOLO verified targets (Green)."""
+    rendered = Image.fromarray(np.asarray(image_rgb, dtype=np.uint8), mode="RGB")
+    draw = ImageDraw.Draw(rendered)
+    font = ImageFont.load_default()
+
+    # 1. Draw SAM 3 Coarse Proposals in Gold
+    for idx, prop in enumerate(coarse_proposals):
+        box = prop["box"]
+        x0, y0, x1, y1 = (float(v) for v in box)
+        draw.rectangle((x0, y0, x1, y1), outline=(255, 215, 0), width=2)
+        draw.text((x0 + 2, y0 + 2), f"Coarse #{idx+1}", fill=(255, 215, 0), font=font)
+
+    # 2. Draw YOLO Verified Targets in Bright Green
+    for det in verified_detections:
+        box = det["box"]
+        x0, y0, x1, y1 = (float(v) for v in box)
+        color = (52, 199, 89)  # Bright Green
+        draw.rectangle((x0, y0, x1, y1), outline=color, width=4)
+        label_text = f"Verified: {det['label']} ({det['score']:.2f})"
+        text_box = draw.textbbox((x0, y0), label_text, font=font)
+        text_height = text_box[3] - text_box[1]
+        text_width = text_box[2] - text_box[0]
+        text_y = max(0.0, y0 - text_height - 6)
+        draw.rectangle((x0, text_y, x0 + text_width + 8, text_y + text_height + 6), fill=color)
+        draw.text((x0 + 4, text_y + 3), label_text, fill=(255, 255, 255), font=font)
+
+    return np.asarray(rendered)
