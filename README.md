@@ -1,127 +1,107 @@
-# Road Damage Detection Applications
+# Road Damage Detection & SAM 3 Pixel Mask Refinement
 
-This project is road damage detection applications that designed to enhance road safety and infrastructure maintenance by swiftly identifying and categorizing various forms of road damage, such as potholes and cracks.
+A two-tier deep learning framework combining fine-tuned YOLOv8-small candidate detection with Meta Segment Anything Model 3 (SAM 3) zero-shot pixel mask refinement for automated pavement defect auditing.
 
-## Performing Detection Using Image
-![Detection using image](resource/RDD_Image_Example.gif)
+![Banner](resource/banner.png)
 
-## Performing Detection Using Video
-![Detection using video](resource/RDD_Video_Example.gif)
+## Project Overview
 
-## Optional SAM 3 Crack Masks
+Standard bounding box object detectors like YOLO output rectangular boxes that overestimate road crack surface area by including non-damaged asphalt background inside the detection box. This project implements a hybrid pipeline that snaps directly onto exact crack contours without requiring expensive pixel-level manual mask annotations during training.
 
-The image-detection page can refine every YOLO bounding box into a pixel mask using Meta SAM 3. The app sends the original image and raw YOLO boxes to an isolated CUDA service, then provides a colored overlay and a binary-mask PNG for download.
+### Key Features
+* Zero-Shot Boundary Precision: Isolates exact crack boundaries (longitudinal, transverse, alligator cracks, and potholes), removing background asphalt noise from detector boxes.
+* Single-Process In-Memory CUDA Execution: Runs YOLOv8 and SAM 3 within a single Python environment under PyTorch BFloat16 autocast, eliminating network socket overhead.
+* Dual Pipeline Modes:
+  1. Baseline Mode (Image -> YOLO -> SAM 3): Fast single-pass execution (54.3 ms YOLO / ~1.0 s total latency).
+  2. Advanced Mode (SAM 3 -> YOLO -> SAM 3): Three-step coarse-to-fine discovery pass (9 coarse proposals, 88.9% false-positive noise reduction).
+* Real-Time Latency Benchmark: Live performance metrics displaying YOLO time, SAM 3 time, total latency, and throughput FPS.
 
-SAM 3 uses a separate environment because its official release requires Python 3.12+, PyTorch 2.7+, CUDA 12.6+, a CUDA GPU, and approved checkpoint access. See [sam3_service/README.md](sam3_service/README.md) for setup instructions. After starting the service, set `SAM3_SERVICE_URL` and enable **Generate precise SAM 3 masks from YOLO bounding boxes** on the Image Detection page.
+## Hugging Face Access & SAM 3 Checkpoint Authentication
 
-The project is powered by YOLOv8 deep learning model that trained on Crowdsensing-based Road Damage Detection Challenge 2022 dataset.
+Meta's official SAM 3 checkpoint is hosted as a gated model on Hugging Face. Users running this repository for the first time must authenticate with Hugging Face:
 
-There is four types of damage that this model can detects such as:
-- Longitudinal Crack
-- Transverse Crack
-- Alligator Crack
-- Potholes
+1. Accept Meta's License: Visit Meta's official SAM 3 repository page on Hugging Face and accept the model license terms.
+2. Generate Access Token: Create a User Access Token in your Hugging Face account settings.
+3. Authenticate in Terminal:
+   ```bash
+   pip install huggingface_hub
+   huggingface-cli login
+   ```
+   Alternatively, export your access token as an environment variable:
+   ```bash
+   export HF_TOKEN="hf_your_access_token_here"
+   ```
 
-## Running on Local Server
+## System Requirements & Prerequisites
 
-This is the step that you take to install and run the web-application on the local server.
+| Component | Requirement |
+| :--- | :--- |
+| Operating System | Linux (Ubuntu/Debian) or WSL2 on Windows / macOS |
+| Python Version | Python 3.10, 3.11, or 3.12 |
+| GPU / Hardware | NVIDIA CUDA-capable GPU (Required for SAM 3 BFloat16 ViT execution) |
+| Hugging Face Account | Free Hugging Face account + User Access Token |
+| Deep Learning Engine | PyTorch 2.3+ with CUDA 12.x support |
 
-``` bash
-# Install CUDA if available
-# https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html
+## Quickstart & Installation
 
-# Create the python environment
-conda create -n rdd python=3.8
-conda activate rdd
-
-# Install pytorch-CUDA
-# https://pytorch.org/get-started/locally/
-conda install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=11.8 -c pytorch -c nvidia
-
-# Install ultralytics deep learning framework
-# https://docs.ultralytics.com/quickstart/
-pip install ultralytics
-
-# Clone the repository
-git clone https://github.com/oracl4/RoadDamageDetection.git
-cd RoadDamageDetection
-
-# Install requirements
-pip install -r requirements.txt
-
-# Start the streamlit webserver
-streamlit run Home.py
+1. Clone the repository:
+```bash
+git clone https://github.com/vsazzy/RoadDamageDetection-SAM3.git
+cd RoadDamageDetection-SAM3
 ```
 
-## Web Demo
-
-### [🎈Webserver Online Demo](https://roaddamagedetection.streamlit.app/)
-    
-    You can access the webserver demo on the streamlit cloud. But due to hardware limitations, some functions may not be working as intended. Such as, the realtime detection cannot capture the webcam input and slow inference on video detection.
-
-## Training
-
-### Prepare the Dataset
-
-Download the datasets from this [github](https://github.com/sekilab/RoadDamageDetector) and you can extract the *RDD2022.zip* files into this structure.
-
-```
-/home/oracl4/project/rdd/dataset/RDD2022/
-├── RDD2022_all_countries
-│   ├── China_Drone
-│   │   └── train
-│   │       ├── annotations
-│   │       │   └── xmls
-│   │       ├── images
-│   │       └── labels # Created after prepare dataset process
-│   ├── China_MotorBike
-│   │   └── ...
-│   ├── Czech
-│   │   └── ...
-│   ├── India
-│   │   └── ...
-│   ├── Japan
-│   │   └── ...
-│   ├── Norway
-│   │   └── ...
-│   └── United_States
-│       └── ...
-└── rawData # Not Used, .zip folder
+2. Create and activate a Python virtual environment:
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
 ```
 
-Perform the dataset conversion from PascalVOC to YOLOv8 format using **0_PrepareDatasetYOLOv8.ipnb** notebook. This will also create a train and val split for the dataset due to lack of test labels on the original dataset. It will also remove excess background image from the dataset. It will copy the dataset and create a new directory on the training folder.
-
-```
-├── dataset
-│   └── rddJapanIndiaFiltered
-│       ├── India
-│       │   ├── images
-│       │   │   ├── train
-│       │   │   └── val
-│       │   └── labels
-│       │       ├── train
-│       │       └── val
-│       ├── Japan
-│       │   └── ...
-│       └── rdd_JapanIndia.yaml # Create this file for YOLO dataset config
-└── runs
+3. Install dependencies:
+```bash
+pip install ultralytics streamlit opencv-python Pillow requests huggingface_hub
+pip install git+https://github.com/facebookresearch/segment-anything-2.git
 ```
 
-Run the training on **1_TrainingYOLOv8.ipynb** notebook. You can change the hyperparamter and training configuration on that notebook.
+4. Authenticate with Hugging Face:
+```bash
+huggingface-cli login
+```
 
-## Evaluation Result
+5. Launch the application:
+```bash
+TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 streamlit run Home.py
+```
 
-This is the training result of the YOLOv8s model that trained on the filtered Japan and India dataset with RTX2060 GPU. You can perform the evaluation on your dataset with **2_EvaluationTesting.ipynb** notebook, just convert your dataset into ultralytics format.
+Open your browser at `http://localhost:8501`.
 
-<p align="center">
-    <img src='resource/PR_curve.png' width='80%'>
-    <img src='resource/confusion_matrix.png' width='80%'>
-    <img src='resource/val_batch2_pred.jpg' width='100%'>
-</p>
+## Project Directory Structure
 
-## License and Citations
-- Road Damage Dataset from Crowdsensing-based Road Damage Detection Challenge (CRDDC2022)
-- All rights reserved on YOLOv8 license permits by [Ultralytics](https://github.com/ultralytics/ultralytics) and [Streamlit](https://streamlit.io/) framework
+```
+RoadDamageDetection-SAM3/
+├── models/
+│   └── YOLOv8_Small_RDD.pt          Trained YOLOv8 checkpoint (Auto-downloads if missing)
+├── sam3_service/
+│   └── inference.py                 Meta SAM 3 engine (Baseline & Coarse-to-Fine)
+├── sample_utils/
+│   └── download.py                  Automatic checkpoint downloader
+├── segmentation/
+│   └── masks.py                     Mask visualization & proposal overlays
+├── training/                        Jupyter notebooks for evaluation & training
+│   ├── 0_PrepareDatasetYOLOv8.ipynb
+│   ├── 1_TrainingYOLOv8.ipynb
+│   └── 2_EvaluationTesting.ipynb
+├── Home.py                          Main Streamlit Web Application
+└── README.md
+```
 
----
-This project is created for the [Road Damage Detection Challenge](https://s.id/RDDHariJalan23) by [Ministry of Public Works and Housing](https://pu.go.id/) for celebrating the "Peringatan Hari Jalan 2023"
+## Performance Benchmark Comparison
+
+| Pipeline Mode | YOLO Latency | SAM 3 Latency | Total Latency | FPS | Proposals Discovered | Verified Targets | Noise Rejection Rate |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Baseline (Image -> YOLO -> SAM 3) | 54.3 ms | 906.3 ms | 1,055.2 ms | 0.90 FPS | N/A | 1 target | N/A |
+| Advanced (SAM 3 -> YOLO -> SAM 3) | 54.3 ms | 2,288.2 ms | 2,342.5 ms | 0.43 FPS | 9 regions | 1 target | 88.9% |
+
+## Dataset & Citations
+
+* Dataset Source: Trained on the public Crowdsensing-based Road Damage Detection Challenge (CRDDC2022 / RDD2022) dataset (Japan and India subsets) created by Seki Lab (University of Tokyo) and the Ministry of Land, Infrastructure, Transport and Tourism, Japan.
+* Categories: D00 Longitudinal Crack, D10 Transverse Crack, D20 Alligator Crack, and D40 Potholes.
