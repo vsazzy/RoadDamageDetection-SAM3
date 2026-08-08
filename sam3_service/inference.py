@@ -6,6 +6,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 from PIL import Image
+import torch
 
 
 def xyxy_to_normalized_cxcywh(
@@ -87,7 +88,6 @@ class Sam3BoxSegmenter:
     """Loads SAM 3 once and produces one instance mask per YOLO box."""
 
     def __init__(self, confidence_threshold: float = 0.05):
-        import torch
         from sam3 import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
 
@@ -95,11 +95,10 @@ class Sam3BoxSegmenter:
             raise RuntimeError("The official SAM 3 service requires a CUDA-capable GPU.")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        self._autocast = torch.autocast("cuda", dtype=torch.bfloat16)
-        self._autocast.__enter__()
-        self.processor = Sam3Processor(
-            build_sam3_image_model(), confidence_threshold=confidence_threshold
-        )
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            self.processor = Sam3Processor(
+                build_sam3_image_model(), confidence_threshold=confidence_threshold
+            )
 
     def segment(
         self,
@@ -109,21 +108,24 @@ class Sam3BoxSegmenter:
     ) -> tuple[np.ndarray, np.ndarray]:
         image = image.convert("RGB")
         width, height = image.size
-        state = self.processor.set_image(image)
-        masks = []
-        scores = []
-        for box in boxes_xyxy:
-            self.processor.reset_all_prompts(state)
-            state = self.processor.add_geometric_prompt(
-                state=state,
-                box=xyxy_to_normalized_cxcywh(box, width, height),
-                label=True,
-            )
-            candidates = state["masks"].detach().cpu().numpy()
-            candidate_scores = state["scores"].detach().cpu().numpy()
-            mask, score = select_box_mask(candidates, candidate_scores, box)
-            masks.append(clip_mask_to_padded_box(mask, box, box_padding))
-            scores.append(score)
+        
+        # 💡 Explicitly wrap inference pass in BFloat16 CUDA autocast
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            state = self.processor.set_image(image)
+            masks = []
+            scores = []
+            for box in boxes_xyxy:
+                self.processor.reset_all_prompts(state)
+                state = self.processor.add_geometric_prompt(
+                    state=state,
+                    box=xyxy_to_normalized_cxcywh(box, width, height),
+                    label=True,
+                )
+                candidates = state["masks"].detach().bool().cpu().numpy()
+                candidate_scores = state["scores"].detach().float().cpu().numpy()
+                mask, score = select_box_mask(candidates, candidate_scores, box)
+                masks.append(clip_mask_to_padded_box(mask, box, box_padding))
+                scores.append(score)
 
         if not masks:
             return (
